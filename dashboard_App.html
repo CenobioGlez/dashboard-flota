@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<!-- Metadatos para App Móvil -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    
+    <!-- Script para registrar el "Service Worker" (permite que funcione como App) -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').catch(err => console.log('ServiceWorker error:', err));
+        }
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SITS - Consola Autónoma de Auditoría de Flota</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: { colors: { slate: { 850: '#151f32', 900: '#0f172a', 950: '#020617' } } }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col antialiased">
+
+    <header class="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-50">
+        <div class="max-w-[1600px] mx-auto flex flex-col xl:flex-row justify-between items-center gap-4">
+            
+            <div class="flex items-center gap-3 w-full xl:w-auto">
+                <div class="p-2 bg-indigo-600 text-white rounded-lg shadow-lg">
+                    <i data-lucide="layers" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-black tracking-wide text-white uppercase">SITS · Auditoría Cruzada de Flota</h1>
+                    <p class="text-xs text-slate-400 font-mono">Cruce de Pasajeros (APC) vs Odómetro Real (GPS)</p>
+                </div>
+            </div>
+
+            <div class="flex flex-col lg:flex-row items-center gap-3 bg-slate-950 p-2.5 rounded-xl border border-slate-800 w-full xl:w-auto">
+                
+                <div class="flex flex-col sm:flex-row gap-3 border-b lg:border-b-0 lg:border-r border-slate-800 pb-3 lg:pb-0 lg:pr-4 w-full sm:w-auto">
+                    <div class="flex items-center gap-2">
+                        <label for="csvPasajeros" class="text-[10px] font-bold text-emerald-400 uppercase whitespace-nowrap cursor-pointer hover:text-white flex items-center gap-1">
+                            <i data-lucide="users" class="w-4 h-4"></i> 1. CSV Pasajeros:
+                        </label>
+                        <input type="file" id="csvPasajeros" accept=".csv" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700 file:cursor-pointer w-48">
+                    </div>
+                    
+                    <div class="flex items-center gap-2">
+                        <label for="csvKilometros" class="text-[10px] font-bold text-amber-400 uppercase whitespace-nowrap cursor-pointer hover:text-white flex items-center gap-1">
+                            <i data-lucide="map" class="w-4 h-4"></i> 2. CSV Kilómetros:
+                        </label>
+                        <input type="file" id="csvKilometros" accept=".csv" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700 file:cursor-pointer w-48">
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-3 w-full sm:w-auto justify-start font-mono text-xs pl-1">
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-[10px] font-bold text-slate-500 uppercase">Unidad:</span>
+                        <select id="selUnidad" onchange="filtrarYRenderizar()" class="bg-slate-900 border border-slate-700 text-cyan-400 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500 disabled:opacity-50 cursor-pointer w-28" disabled>
+                            <option value="Todas">Flota Total</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-[10px] font-bold text-slate-500 uppercase">Día:</span>
+                        <select id="selFecha" onchange="filtrarYRenderizar()" class="bg-slate-900 border border-slate-700 text-cyan-400 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500 disabled:opacity-50 cursor-pointer w-28" disabled>
+                            <option value="Todas">Periodo Total</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 w-full xl:w-auto justify-end mt-2 xl:mt-0">
+                <div id="statusConnection" class="bg-rose-500/10 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded text-xs font-mono flex items-center gap-1.5 whitespace-nowrap transition-colors duration-300">
+                    <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span> Esperando 2 Archivos
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-[1600px] w-full mx-auto p-4 grid grid-cols-1 xl:grid-cols-3 gap-6">
+        
+        <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-xl">
+            <div>
+                <div class="flex justify-between items-start border-b border-slate-800 pb-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="users" class="text-indigo-400 w-5 h-5"></i>
+                        <h2 class="text-base font-bold text-white tracking-wide uppercase">1. Demanda Operativa (APC)</h2>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/60 text-center">
+                        <span class="text-[10px] text-slate-400 uppercase font-semibold block mb-1">Subidas Registradas</span>
+                        <span id="valSubidas" class="text-3xl font-bold text-emerald-400 font-mono">0</span>
+                    </div>
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/60 text-center">
+                        <span class="text-[10px] text-slate-400 uppercase font-semibold block mb-1">Bajadas Registradas</span>
+                        <span id="valBajadas" class="text-3xl font-bold text-rose-400 font-mono">0</span>
+                    </div>
+                </div>
+
+                <div class="bg-slate-950 rounded-xl p-4 border border-slate-800">
+                    <h3 class="text-xs font-bold text-slate-300 uppercase mb-3 block text-center">Comportamiento del Pasaje por Hora</h3>
+                    <div class="h-48">
+                        <canvas id="informeApcChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-xl">
+            <div class="flex-1 flex flex-col">
+                <div class="flex justify-between items-start border-b border-slate-800 pb-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="map" class="text-amber-500 w-5 h-5"></i>
+                        <h2 class="text-base font-bold text-white tracking-wide uppercase">2. Productividad y Rodamiento</h2>
+                    </div>
+                </div>
+
+                <div class="flex-1 bg-slate-950 rounded-xl border border-slate-800 p-5 flex flex-col justify-center space-y-6 text-center">
+                    <div>
+                        <span class="text-xs text-slate-400 block uppercase font-semibold mb-1">Filtro de Flota Activo</span>
+                        <span id="txtUnidad" class="text-sm font-bold text-white bg-slate-900 px-4 py-2 rounded-lg border border-slate-800 block mx-auto w-max font-mono">Esperando archivos...</span>
+                    </div>
+                    <div>
+                        <span class="text-xs text-slate-400 block uppercase font-semibold mb-1">Kilometraje Real (Cruce GPS)</span>
+                        <span id="txtKms" class="text-4xl font-black text-amber-400 font-mono">0.00 <span class="text-lg">km</span></span>
+                        <span id="txtJornadas" class="text-[10px] text-slate-500 block mt-1 uppercase font-bold">Datos exactos de odómetro</span>
+                    </div>
+                    <div class="border-t border-slate-800 pt-4">
+                        <span class="text-xs text-slate-400 block uppercase font-semibold mb-1">Índice de Pasajeros por Kilómetro (IPK)</span>
+                        <span id="txtIpk" class="text-4xl font-black text-cyan-400 font-mono">0.00</span>
+                        <span class="text-[10px] text-slate-500 block uppercase mt-1">Eficiencia de Recaudación Real</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-xl">
+            <div>
+                <div class="flex justify-between items-start border-b border-slate-800 pb-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="dollar-sign" class="text-emerald-500 w-5 h-5"></i>
+                        <h2 class="text-base font-bold text-white tracking-wide uppercase">3. Liquidación Exacta</h2>
+                    </div>
+                </div>
+
+                <div class="space-y-3 mb-4">
+                    
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex flex-col sm:flex-row justify-between items-center gap-2">
+                        <div class="flex items-center gap-2 w-full sm:w-auto">
+                            <span class="text-xs text-slate-400 uppercase font-semibold">Tarifa:</span>
+                            <div class="flex items-center bg-slate-900 border border-slate-700 rounded px-2 py-1 focus-within:border-emerald-500 transition-colors">
+                                <span class="text-emerald-500 font-bold text-xs mr-1">$</span>
+                                <input type="number" id="inTarifa" value="10.00" step="0.50" min="0" oninput="filtrarYRenderizar()" class="bg-transparent text-emerald-400 text-xs font-mono outline-none w-14 text-right">
+                            </div>
+                        </div>
+                        <span id="txtIngreso" class="text-xl font-black text-emerald-400 font-mono">$0.00</span>
+                    </div>
+
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex flex-col sm:flex-row justify-between items-center gap-2">
+                        <div class="flex items-center gap-2 w-full sm:w-auto">
+                            <span class="text-xs text-slate-400 uppercase font-semibold">Costo x KM:</span>
+                            <div class="flex items-center bg-slate-900 border border-slate-700 rounded px-2 py-1 focus-within:border-rose-500 transition-colors">
+                                <span class="text-rose-500 font-bold text-xs mr-1">$</span>
+                                <input type="number" id="inCosto" value="8.50" step="0.10" min="0" oninput="filtrarYRenderizar()" class="bg-transparent text-rose-400 text-xs font-mono outline-none w-14 text-right">
+                            </div>
+                        </div>
+                        <span id="txtCosto" class="text-xl font-black text-rose-400 font-mono">$0.00</span>
+                    </div>
+
+                    <div class="bg-slate-950 border border-indigo-500/30 rounded-xl p-6 text-center shadow-lg shadow-indigo-500/10 mt-6 relative overflow-hidden">
+                        <div class="absolute inset-0 bg-gradient-to-tr from-indigo-500/5 to-transparent pointer-events-none"></div>
+                        <span class="text-xs text-indigo-400 font-mono uppercase tracking-widest block mb-2 relative z-10">Utilidad Neta Auditada</span>
+                        <h3 id="txtMargen" class="text-4xl sm:text-5xl font-black text-white font-mono relative z-10">+$0.00</h3>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        lucide.createIcons();
+        
+        let BD_PASAJEROS = []; 
+        let BD_KILOMETROS = []; 
+        
+        let setUnidadesGlobal = new Set();
+        let setFechasGlobal = new Set();
+        let chartApcInstance = null;
+
+        // 1. NORMALIZADOR UNIVERSAL DE FECHAS
+        function normalizarFecha(fechaStr) {
+            if (!fechaStr) return "Desconocida";
+            const strLimpio = String(fechaStr).trim();
+            const match = strLimpio.match(/(\d{1,4})[-/](\d{1,2})[-/](\d{1,4})/);
+            if (!match) return strLimpio;
+            
+            let p1 = match[1], p2 = match[2], p3 = match[3];
+            
+            if (p1.length === 4) {
+                return `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
+            } else if (p3.length === 4) {
+                return `${p3}-${p2.padStart(2, '0')}-${p1.padStart(2, '0')}`;
+            }
+            return strLimpio;
+        }
+
+        // 2. Escuchar Archivos
+        document.getElementById('csvPasajeros').addEventListener('change', function(e) {
+            const archivo = e.target.files[0];
+            if (!archivo) return;
+            Papa.parse(archivo, {
+                header: true, skipEmptyLines: true, dynamicTyping: true,
+                complete: function(results) { procesarPasajeros(results.data, results.meta.fields); }
+            });
+        });
+
+        document.getElementById('csvKilometros').addEventListener('change', function(e) {
+            const archivo = e.target.files[0];
+            if (!archivo) return;
+            Papa.parse(archivo, {
+                header: true, skipEmptyLines: true, dynamicTyping: true,
+                complete: function(results) { procesarKilometros(results.data, results.meta.fields); }
+            });
+        });
+
+        function buscarCol(columnas, nombres) {
+            for (let n of nombres) {
+                const encontrada = columnas.find(c => c.trim().toLowerCase() === n.toLowerCase());
+                if (encontrada) return encontrada;
+            }
+            return null;
+        }
+
+        // 3. Procesadores
+        function procesarPasajeros(datos, columnas) {
+            const colUnidad = buscarCol(columnas, ['Plate No.', 'Placa']);
+            const colSubidas = buscarCol(columnas, ['On person', 'Subidas']);
+            const colBajadas = buscarCol(columnas, ['Off person', 'Bajadas']);
+            const colHora = buscarCol(columnas, ['Open door time', 'Start Time']);
+
+            if (!colUnidad || !colSubidas || !colHora) {
+                alert("❌ El CSV de Pasajeros no tiene las columnas correctas."); return;
+            }
+
+            BD_PASAJEROS = [];
+            datos.forEach(fila => {
+                const unidad = String(fila[colUnidad] || '').trim().toUpperCase();
+                const subidas = parseInt(fila[colSubidas]) || 0;
+                const bajadas = colBajadas ? (parseInt(fila[colBajadas]) || 0) : 0;
+                const fechaHoraRaw = String(fila[colHora] || '').trim();
+
+                if (unidad && fechaHoraRaw && fechaHoraRaw !== 'undefined') {
+                    const partes = fechaHoraRaw.split(' ');
+                    const fechaLimpia = normalizarFecha(partes[0]);
+                    
+                    let horaEntera = 0;
+                    if (partes.length > 1) horaEntera = parseInt(partes[1].split(':')[0]) || 0;
+
+                    setUnidadesGlobal.add(unidad);
+                    setFechasGlobal.add(fechaLimpia);
+                    
+                    BD_PASAJEROS.push({
+                        unidad: unidad, subidas: subidas, bajadas: bajadas,
+                        fecha: fechaLimpia, hora: horaEntera
+                    });
+                }
+            });
+            verificarEstadoYRenderizar();
+        }
+
+        function procesarKilometros(datos, columnas) {
+            const colUnidad = buscarCol(columnas, ['Plate No.', 'Placa']);
+            const colFecha = buscarCol(columnas, ['Start time', 'Begin time']);
+            const colKms = buscarCol(columnas, ['Mileage(KM)', 'Mileage', 'Kilometros']);
+
+            if (!colUnidad || !colFecha || !colKms) {
+                alert("❌ El CSV de Kilómetros no tiene las columnas correctas."); return;
+            }
+
+            BD_KILOMETROS = [];
+            datos.forEach(fila => {
+                const unidad = String(fila[colUnidad] || '').trim().toUpperCase();
+                const kms = parseFloat(fila[colKms]) || 0.0;
+                const fechaRaw = String(fila[colFecha] || '').trim();
+
+                if (unidad && fechaRaw && fechaRaw !== 'undefined') {
+                    const partes = fechaRaw.split(' ');
+                    const fechaLimpia = normalizarFecha(partes[0]);
+
+                    setUnidadesGlobal.add(unidad);
+                    setFechasGlobal.add(fechaLimpia);
+                    
+                    BD_KILOMETROS.push({ unidad: unidad, kms: kms, fecha: fechaLimpia });
+                }
+            });
+            verificarEstadoYRenderizar();
+        }
+
+        function verificarEstadoYRenderizar() {
+            const statusBox = document.getElementById('statusConnection');
+            
+            if (BD_PASAJEROS.length > 0 && BD_KILOMETROS.length > 0) {
+                statusBox.className = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded text-xs font-mono flex items-center gap-1.5 transition-colors duration-300";
+                statusBox.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Cruce de Datos Exitoso`;
+                
+                poblarSelectores(Array.from(setUnidadesGlobal).sort(), Array.from(setFechasGlobal).sort());
+                filtrarYRenderizar();
+            } else if (BD_PASAJEROS.length > 0 || BD_KILOMETROS.length > 0) {
+                statusBox.className = "bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded text-xs font-mono flex items-center gap-1.5 transition-colors duration-300";
+                statusBox.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> Falta cargar el 2do Archivo`;
+            }
+        }
+
+        function poblarSelectores(unidades, fechas) {
+            const selUnidad = document.getElementById('selUnidad');
+            const selFecha = document.getElementById('selFecha');
+
+            const uPrev = selUnidad.value;
+            const fPrev = selFecha.value;
+
+            selUnidad.innerHTML = '<option value="Todas">Flota Total</option>';
+            selFecha.innerHTML = '<option value="Todas">Periodo Total</option>';
+
+            unidades.forEach(u => selUnidad.add(new Option(u, u)));
+            fechas.forEach(f => selFecha.add(new Option(f, f)));
+
+            if (unidades.includes(uPrev)) selUnidad.value = uPrev;
+            if (fechas.includes(fPrev)) selFecha.value = fPrev;
+
+            selUnidad.disabled = false;
+            selFecha.disabled = false;
+        }
+
+        // 4. EL CEREBRO DE CÁLCULO FINANCIERO DINÁMICO
+        function filtrarYRenderizar() {
+            const uSel = document.getElementById('selUnidad').value;
+            const fSel = document.getElementById('selFecha').value;
+            
+            // LECTURA EN TIEMPO REAL DE LOS INPUTS DEL MÓDULO 3
+            const tarifaActiva = parseFloat(document.getElementById('inTarifa').value) || 0;
+            const costoKmActivo = parseFloat(document.getElementById('inCosto').value) || 0;
+
+            let paxFiltrados = BD_PASAJEROS;
+            if (uSel !== 'Todas') paxFiltrados = paxFiltrados.filter(d => d.unidad === uSel);
+            if (fSel !== 'Todas') paxFiltrados = paxFiltrados.filter(d => d.fecha === fSel);
+
+            let kmFiltrados = BD_KILOMETROS;
+            if (uSel !== 'Todas') kmFiltrados = kmFiltrados.filter(d => d.unidad === uSel);
+            if (fSel !== 'Todas') kmFiltrados = kmFiltrados.filter(d => d.fecha === fSel);
+
+            let subidasTotales = 0, bajadasTotales = 0, kmTotales = 0.0;
+            const mapaHoras = Array(24).fill(0);
+            
+            paxFiltrados.forEach(d => {
+                subidasTotales += d.subidas;
+                bajadasTotales += d.bajadas;
+                if(d.hora >= 0 && d.hora < 24) mapaHoras[d.hora] += d.subidas;
+            });
+
+            kmFiltrados.forEach(d => kmTotales += d.kms);
+
+            // CÁLCULO CON VARIABLES DINÁMICAS
+            const ingresoBruto = subidasTotales * tarifaActiva;
+            const opexTotal = kmTotales * costoKmActivo;
+            const margenNeto = ingresoBruto - opexTotal;
+            const ipk = kmTotales > 0 ? (subidasTotales / kmTotales) : 0.0;
+
+            // Inyección UI
+            let textoUnidad = uSel === 'Todas' ? `Consolidado de Flota` : uSel;
+            if (fSel !== 'Todas') textoUnidad += ` | ${fSel}`;
+            
+            document.getElementById('txtUnidad').innerText = textoUnidad;
+            document.getElementById('txtKms').innerText = `${kmTotales.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2})} km`;
+            document.getElementById('txtIpk').innerText = ipk.toFixed(2);
+            
+            document.getElementById('valSubidas').innerText = subidasTotales.toLocaleString('es-MX');
+            document.getElementById('valBajadas').innerText = bajadasTotales.toLocaleString('es-MX');
+
+            document.getElementById('txtIngreso').innerText = `$${ingresoBruto.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            document.getElementById('txtCosto').innerText = `$${opexTotal.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            
+            const txtMargen = document.getElementById('txtMargen');
+            txtMargen.innerText = `${margenNeto >= 0 ? '+' : ''}$${margenNeto.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            txtMargen.className = margenNeto < 0 
+                ? "text-4xl sm:text-5xl font-black text-rose-400 font-mono relative z-10" 
+                : "text-4xl sm:text-5xl font-black text-white font-mono relative z-10";
+
+            dibujarGrafica(mapaHoras);
+        }
+
+        function dibujarGrafica(datosHoras) {
+            const labelsGrafica = Array.from({length: 24}, (_, i) => `${i.toString().padStart(2, '0')}:00`);
+            const ctx = document.getElementById('informeApcChart').getContext('2d');
+            if (chartApcInstance) chartApcInstance.destroy();
+            
+            chartApcInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labelsGrafica,
+                    datasets: [{
+                        data: datosHoras, backgroundColor: '#6366f1', borderRadius: 4, hoverBackgroundColor: '#818cf8'
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#64748b', maxTicksLimit: 12 }, grid: { display: false } },
+                        y: { ticks: { color: '#64748b', precision: 0 }, grid: { color: '#1e293b' }, beginAtZero: true }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
